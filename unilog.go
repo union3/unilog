@@ -4,30 +4,23 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 )
 
 const (
-	ADAPTER_CONSOLE = "console"
-	ADAPTER_FILE    = "file"
+	adapterConsole = "console"
+	adapterFile    = "file"
 )
 
 type newLoggerFunc func() Logger
 
 var adapters = make(map[string]newLoggerFunc)
 
+//UniLogger is the main log struct
 type UniLogger struct {
 	lock    sync.Mutex
 	level   int
 	init    bool
 	outputs []*nameLogger
-}
-
-type Logger interface {
-	Init(config string) error
-	WriteMsg(when time.Time, msg string, level int) error
-	Destroy()
-	Flush()
 }
 
 type nameLogger struct {
@@ -56,6 +49,7 @@ func (m *UniLogger) setLogger(adapterName string, configs ...string) error {
 	return nil
 }
 
+//SetLogger func is set a adapter config for logger
 func (m *UniLogger) SetLogger(adapterName string, configs ...string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -66,6 +60,7 @@ func (m *UniLogger) SetLogger(adapterName string, configs ...string) error {
 	return nil
 }
 
+//DelLogger func is delete a adapter config
 func (m *UniLogger) DelLogger(adapterName string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
