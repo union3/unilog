@@ -30,10 +30,6 @@ const (
 
 const levelLoggerImpl = -1
 
-type newOutFunc func() Out
-
-var adapters = make(map[string]newOutFunc)
-
 //UniLogger is the main log struct
 type Logger struct {
 	lock          sync.Mutex
@@ -41,11 +37,11 @@ type Logger struct {
 	init          bool
 	callDepthFlag bool
 	callDepth     int
-	outputs       []*nameOut
+	outputs       []*nameOutput
 }
 
-type nameOut struct {
-	Out
+type nameOutput struct {
+	Output
 	name string
 }
 
@@ -66,7 +62,7 @@ func (m *Logger) setOutput(adapterName string, configs ...string) error {
 		fmt.Fprintln(os.Stderr, "unilog: setOutput "+err.Error())
 		return err
 	}
-	m.outputs = append(m.outputs, &nameOut{name: adapterName, Out: lg})
+	m.outputs = append(m.outputs, &nameOutput{name: adapterName, Output: lg})
 	return nil
 }
 
@@ -75,7 +71,7 @@ func (m *Logger) SetOutput(adapterName string, configs ...string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	if !m.init {
-		m.outputs = []*nameOut{}
+		m.outputs = []*nameOutput{}
 		m.init = true
 	}
 	return m.setOutput(adapterName, configs...)
@@ -85,7 +81,7 @@ func (m *Logger) SetOutput(adapterName string, configs ...string) error {
 func (m *Logger) DelOutput(adapterName string) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	outputs := []*nameOut{}
+	outputs := []*nameOutput{}
 	for _, lg := range m.outputs {
 		if lg.name == adapterName {
 			lg.Destroy()

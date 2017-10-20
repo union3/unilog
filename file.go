@@ -14,11 +14,11 @@ import (
 	"time"
 )
 
-type fileLogger struct {
-	sync.RWMutex                // write log order by order and  atomic incr maxLinesCurLines and maxSizeCurSize
-	Filename             string `json:"filename"`
+type fileOutput struct {
+	sync.RWMutex         // write log order by order and  atomic incr maxLinesCurLines and maxSizeCurSize
 	fileWriter           *os.File
-	MaxLines             int `json:"maxlines"`
+	Filename             string `json:"filename"`
+	MaxLines             int    `json:"maxlines"`
 	maxLinesCurLines     int
 	MaxSize              int `json:"maxsize"`
 	maxSizeCurSize       int
@@ -29,7 +29,21 @@ type fileLogger struct {
 	Rotate               bool   `json:"rotate"`
 	Level                int    `json:"level"`
 	Perm                 string `json:"perm"`
+	RotatePerm           string `json:"rotateperm"`
 	fileNameOnly, suffix string // like "project.log", project is fileNameOnly and .log is suffix
+}
+
+// newFileWriter create a FileLogWriter returning as LoggerInterface.
+func newFileOutput() Output {
+	m := &fileOutput{
+		Daily:      true,
+		MaxDays:    7,
+		Rotate:     true,
+		RotatePerm: "0440",
+		Level:      LevelDebug,
+		Perm:       "0660",
+	}
+	return m
 }
 
 // Init file logger with json config.
@@ -43,7 +57,7 @@ type fileLogger struct {
 //	"rotate":true,
 //  	"perm":"0600"
 //	}
-func (m *fileLogger) Init(jsonConfig string) error {
+func (m *fileOutput) Init(jsonConfig string) error {
 	err := json.Unmarshal([]byte(jsonConfig), m)
 	if err != nil {
 		return err
@@ -56,11 +70,11 @@ func (m *fileLogger) Init(jsonConfig string) error {
 	if m.suffix == "" {
 		m.suffix = ".log"
 	}
-	err = m.startLogger()
+	err = m.startOutput()
 	return err
 }
 
-func (m *fileLogger) startLogger() error {
+func (m *fileOutput) startOutput() error {
 	file, err := m.createLogFile()
 	if err != nil {
 		return err
@@ -72,7 +86,7 @@ func (m *fileLogger) startLogger() error {
 	return m.initFd()
 }
 
-func (m *fileLogger) initFd() error {
+func (m *fileOutput) initFd() error {
 	fd := m.fileWriter
 	fInfo, err := fd.Stat()
 	if err != nil {
@@ -95,7 +109,7 @@ func (m *fileLogger) initFd() error {
 	return nil
 }
 
-func (m *fileLogger) lines() (int, error) {
+func (m *fileOutput) lines() (int, error) {
 	fd, err := os.Open(m.Filename)
 	if err != nil {
 		return 0, err
@@ -117,7 +131,7 @@ func (m *fileLogger) lines() (int, error) {
 	return count, nil
 }
 
-func (m *fileLogger) createLogFile() (*os.File, error) {
+func (m *fileOutput) createLogFile() (*os.File, error) {
 	perm, err := strconv.ParseInt(m.Perm, 8, 64)
 	if err != nil {
 		return nil, err
@@ -129,13 +143,13 @@ func (m *fileLogger) createLogFile() (*os.File, error) {
 	return fd, err
 }
 
-func (m *fileLogger) needRotate(size int, day int) bool {
+func (m *fileOutput) needRotate(size int, day int) bool {
 	return (m.MaxLines > 0 && m.maxLinesCurLines >= m.MaxLines) ||
 		(m.MaxSize > 0 && m.maxSizeCurSize >= m.MaxSize) ||
 		(m.Daily && day != m.dailyOpenDate)
 }
 
-func (m *fileLogger) dailyRotate(openTime time.Time) {
+func (m *fileOutput) dailyRotate(openTime time.Time) {
 	year, month, day := openTime.Add(24 * time.Hour).Date()
 	nextDay := time.Date(year, month, day, 0, 0, 0, 0, openTime.Location())
 	tm := time.NewTimer(time.Duration(nextDay.UnixNano() - openTime.UnixNano() + 100))
@@ -149,7 +163,7 @@ func (m *fileLogger) dailyRotate(openTime time.Time) {
 	m.Unlock()
 }
 
-func (m *fileLogger) doRotate(logTime time.Time) error {
+func (m *fileOutput) doRotate(logTime time.Time) error {
 	num := 1
 	fName := ""
 	_, err := os.Lstat(m.Filename)
@@ -180,7 +194,7 @@ func (m *fileLogger) doRotate(logTime time.Time) error {
 	err = os.Chmod(fName, os.FileMode(0440))
 	// re-start logger
 RESTART_LOGGER:
-	startLoggerErr := m.startLogger()
+	startLoggerErr := m.startOutput()
 	go m.deleteOldLog()
 	if startLoggerErr != nil {
 		return fmt.Errorf("Rotate StartLogger: %s", startLoggerErr)
@@ -191,7 +205,7 @@ RESTART_LOGGER:
 	return nil
 }
 
-func (m *fileLogger) deleteOldLog() {
+func (m *fileOutput) deleteOldLog() {
 	dir := filepath.Dir(m.Filename)
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) (returnErr error) {
 		defer func() {
@@ -210,4 +224,49 @@ func (m *fileLogger) deleteOldLog() {
 		}
 		return
 	})
+}
+
+// WriteMsg write logger message into file.
+func (m *fileOutput) WriteMsg(msg logMsg) error {
+	if msg.level > m.Level {
+		return nil
+	}
+	h := msg.when.Format("2006/01/02 15:04:05")
+	d := msg.when.Day()
+	body := h + msg.msg + "\n"
+	if m.Rotate {
+		m.RLock()
+		if m.needRotate(len(body), d) {
+			m.RUnlock()
+			m.Lock()
+			if m.needRotate(len(body), d) {
+				if err := m.doRotate(msg.when); err != nil {
+					fmt.Fprintf(os.Stderr, "FileLogWriter(%q): %s\n", m.Filename, err)
+				}
+			}
+			m.Unlock()
+		} else {
+			m.RUnlock()
+		}
+	}
+	m.Lock()
+	_, err := m.fileWriter.Write([]byte(body))
+	if err == nil {
+		m.maxLinesCurLines++
+		m.maxSizeCurSize += len(body)
+	}
+	m.Unlock()
+	return err
+}
+
+func (m *fileOutput) Destroy() {
+	m.fileWriter.Close()
+}
+
+func (m *fileOutput) Flush() {
+	m.fileWriter.Sync()
+}
+
+func init() {
+	Register(adapterFile, newFileOutput)
 }
